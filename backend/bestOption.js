@@ -17,7 +17,7 @@ const db = ODB.use({
 
 });
 
-const url = 'https://api.telegram.org/bot' + fs.readFileSync('./apiKey'); 
+const url = 'https://api.telegram.org/bot' + fs.readFileSync('./apiKey').toString().replace(/\s/g,''); 
 const app = express();
 
 app.use(express.json());
@@ -216,6 +216,7 @@ app.post('/', (req, res) => {
           // check db and create user if needed
           const rid = await getUserRid (user);
           if (!rid) {
+            
             await db.create('VERTEX', 'User').set({name: req.body.message.from.first_name, id: user}).one();
           }
           
@@ -299,7 +300,7 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
       let results = [];
       
       // if /send #id -> display only this poll
-      if ( query.cmd === '/share') {
+      if (debug ( "debug", query.cmd === '/share')) {
         
       //checking if poll exists
         const exists = await db.select('count(*) as cnt', 'question', 'closed').from('Poll')
@@ -331,9 +332,22 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
         }
       }
       
-      // TODO high: handle search with keywords (#latest, #popular, etc)
-      
-      
+      // TODO high: handle search with keywords (#latest, #popular, etc) 
+      //query.poll. S'asssurer que le latest poll soit dans les privé du user ou dans les public
+      //#tag, #question and #option
+      else{
+        
+        let queryResearch = parseQueryResearch(req.body.inline_query.query);
+
+        
+        results.push( { id: query.poll, 
+          input_message_content: {message_text: msg, parse_mode: 'markdown'},
+          type: "article",
+          title: exists.question,
+          reply_markup: {inline_keyboard: key}
+       });
+      }
+  
       if (results.length === 0) {
         // TODO low set better default answer: send 5 latest public polls?
         
@@ -749,9 +763,101 @@ function parseQuery (query) {
       break;
     default:
       parsed.poll = query.substring(query.indexOf('#'));
+      break;
   }
   return parsed;
 };
+
+//parsing user queries (format: #latest #question wordToSearch)
+async function parseQueryResearch(query){
+  let parsed = {}
+  parsed.cmd = query.substring(query.indexOf('#'), query.indexOf(' '));
+  let results;
+  let finalQuery;
+  
+
+  switch(parsed.cmd){
+    case "#oldest":
+      results = await db.query(`SELECT date, question, public, closed FROM Poll WHERE creator = ${req.body.inline_query.from.id} OR public = true ORDER BY date ASC`);
+      break;
+    case "#latest":
+      results = await db.query(`SELECT date, question, public, closed FROM Poll WHERE creator = ${req.body.inline_query.from.id} OR public = true ORDER BY date DESC`);
+      break;
+    case "#popular":
+      results = await db.query(`select question, date, public, closed, creator.name as creator, creator.id as creatorId, out("PollAnswer").text as answers, out("HasTag").name as tags, $votes.cnt as nbVotes from Poll let $votes=(select count(*) as cnt from AnsweredPoll where in=#33:0) where @rid=#33:0)`);
+      break;
+    case "#tag":
+      parsed.terms = browseTerms(query.substring(query.indexOf(' ') + 1));
+      finalQuery = buildSQLQueryIN(`SELECT date, question, public, closed, out("HasTag").name as tags FROM Poll WHERE (creator = ${req.body.inline_query.from.id} OR public = true)`, parsed.terms, `out("HasTag").name`, ` ORDER BY date ASC`)
+      results = await db.query(finalQuery);
+      break;
+    case "#question":
+      parsed.terms = browseTerms(query.substring(query.indexOf(' ') + 1));
+      finalQuery = buildSQLQueryContains(`SELECT date, question, public, closed FROM Poll WHERE (creator  = ${req.body.inline_query.from.id} OR public = true)`, parsedTerms, ` ORDER BY date ASC)`);
+      results = await db.query(finalQuery);
+      break;
+    case "#option":
+      parsed.terms = browseTerms(query.substring(query.indexOf(' ') + 1));
+      finalQuery = buildSQLQueryIN(`SELECT date, question, public, closed,  out("PollAnswer").text as answers FROM Poll WHERE (creator = ${req.body.inline_query.from.id} OR public = true)`, parsed.terms, `out("PollAnswer").text`, ` ORDER BY date ASC`)
+      results = await db.query(finalQuery);
+      break;
+    default:
+      parsed.terms = browseTerms(query);
+      break;
+  }
+  return parsed;
+}
+
+function buildSQLQueryContains(queryBegin, parsedTerms, queryEnd){
+  
+  let queryResult = queryBegin;
+  
+  if(parsedTerms.length > 0){
+    queryResult += ` AND (`
+    for (var i = 0; i < parsedTerms.length; i++) {
+      if(i != 0){
+        queryResult += ` OR `;
+      }
+      queryResult+= `(question containsText ` + parsedTerms[i] + `)`;
+    }
+    queryResult += `)`;
+  }
+  
+  queryResult += queryEnd;
+  return queryResult;
+}
+
+function buildSQLQueryIN(queryBegin, parsedTerms, inCondition, queryEnd){
+  
+  let queryResult = queryBegin;
+
+  if(parsedTerms.length > 0){
+    queryResult += ` AND (`
+    for (var i = 0; i < parsedTerms.length; i++) {
+      if(i != 0){
+        queryResult += ` OR `;
+      }
+      queryResult+= `(` + parsedTerms[i] + ` IN ` + inCondition + `)`;
+    }
+    queryResult += `)`;
+  }
+  
+  queryResult += queryEnd;
+  return queryResult;
+}
+
+function browseTerms(query){
+  let count = 0;
+  let termsAcc = [];
+  while(count != query.indexOf('#') && count < query.length){
+    indexNextTerm = query.indexOf(' ');
+
+    termsAcc.push(query.substring(count, (indexNextTerm == -1 ? query.length - 1 : indexNextTerm)));
+    count = indexNextTerm;
+    query = query.substring(indexNextTerm);
+  }
+  return termsAcc;
+}
 
 // computes the levenstein distance for 2 words
 function stringDistance (str1, str2) {
