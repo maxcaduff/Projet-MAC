@@ -337,7 +337,46 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
       //#tag, #question and #option
       else{
         
-        let result;
+        parsedTerms = req.body.inline_query.query.split(' ');
+        let query = `SELECT @rid as rid, count( in(AnsweredPoll)), date, question, public, closed FROM Poll WHERE (creator = ${req.body.inline_query.from.id} OR public = true)`
+        let queryMiddle = parseQuerySearch(parsedTerms, 0, req.body.inline_query.query);
+
+        if(queryMiddle.orderBy == undefined){           //Default order by date ASC
+          queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date ASC`;
+        }
+
+        if(queryMiddle.middle != ``){
+          query += ` AND ( ` + queryMiddle.middle +  ` ) `;
+        }
+
+        console.log(query + queryMiddle.orderBy);
+        let result = await db.query(query + queryMiddle.orderBy);
+        
+        if (result != undefined && result.length > 0) {
+          
+          let msg, key, rid;
+
+          for (var i = 0; i < result.length; i++) {
+          
+
+            const poll = await getDisplayablePoll (result[i].rid);
+            msg = poll.text;
+            key = poll.keyboard;
+
+           
+
+            results.push( { id: result[i].rid, 
+                            input_message_content: {message_text: msg, parse_mode: 'markdown'},
+                            type: "article",
+                            title: result[i].question,
+                            reply_markup: {inline_keyboard:   key}
+            });
+            
+          }  
+          
+        }
+
+        /*let result;
 
         result = await parseQueryResearch(req.body.inline_query);
       
@@ -353,13 +392,7 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
             msg = poll.text;
             key = poll.keyboard;
 
-            /*
-            rid = result[i].rid;
-            
-            key = poll.keyboard.slice(0,2);
-            delete key[1][0].callback_data;
-            key[1][0].url = 'telegram.me/BestOptionBot?start=' + rid.substring(1).replace(':', '-');
-            */
+           
 
             results.push( { id: result[i].rid, 
                             input_message_content: {message_text: msg, parse_mode: 'markdown'},
@@ -371,7 +404,7 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
           }
             
           
-        }
+        }*/
         
       }
   
@@ -796,6 +829,122 @@ function parseQuery (query) {
   return parsed;
 };
 
+function parseQuerySearch(parsedTerms, index){
+
+  let queryMiddle, tmp;
+
+  queryMiddle ={};
+  queryMiddle.orderBy = undefined;
+  queryMiddle.middle = ``;
+
+  if(index < parsedTerms.length){
+    switch(parsedTerms[index]){
+      
+      case "#oldest":
+        queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date ASC`;
+        index++;
+        if(index < parsedTerms.length){
+          tmp = parseQuerySearch(parsedTerms, index);
+          queryMiddle.middle += tmp.middle;
+        }
+        break;
+      case "#latest":
+        queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date DESC`;
+        index++;
+        if(index < parsedTerms.length){
+          tmp = parseQuerySearch(parsedTerms, index);
+          queryMiddle.middle += tmp.middle;
+        }
+        break;
+      case "#popular":
+        queryMiddle.orderBy =  ` GROUP BY @rid ORDER BY cnt DESC`;
+        index++;
+        if(index < parsedTerms.length){
+          tmp = parseQuerySearch(parsedTerms, index);
+          queryMiddle.middle += tmp.middle;
+        }
+        break;
+      case "#tag":
+        index++;
+        while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
+          
+          if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
+            queryMiddle.middle += ` OR `
+          }
+          queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) `;
+          index++;
+        }
+        tmp = parseQuerySearch(parsedTerms, index);
+        queryMiddle.middle += tmp.middle;
+        queryMiddle.orderBy = tmp.orderBy;
+        break;
+      case "#question":
+        console.log("question")
+        index++;
+        while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
+          
+          if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
+            queryMiddle.middle += ` OR `
+          }
+          queryMiddle.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) `;
+          index++;
+        }
+        tmp = parseQuerySearch(parsedTerms, index);
+        queryMiddle.middle += tmp.middle;
+        queryMiddle.orderBy = tmp.orderBy;
+        break;
+      case "#option":
+        index++;
+        while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
+          
+          if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
+            queryMiddle.middle += ` OR `
+          }
+          
+          queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
+          index++;
+        }
+        tmp = parseQuerySearch(parsedTerms, index);
+        queryMiddle.middle += tmp.middle;
+        queryMiddle.orderBy = tmp.orderBy;
+        break;
+      default:
+        while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
+          
+          if(index != 0 && checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
+            queryMiddle.middle += ` OR `
+          }
+          
+          queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) OR `
+          queryMiddle.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) OR `;
+          queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
+          index++;
+        }
+        tmp = parseQuerySearch(parsedTerms, index);
+        queryMiddle.middle += tmp.middle;
+        queryMiddle.orderBy = tmp.orderBy;
+        break;
+    }
+    //debug("results", results);
+  }
+
+  console.log(queryMiddle)
+  return queryMiddle;
+
+}
+
+//Check the first char of the array till the index index to see if all the first char are # (ex: ([#latest, #tag, #question, is, there], 2) = false)
+function checkingFirstChar(parsedTerms, index){
+  let count = 0;
+  while(count < index){
+    if(parsedTerms[count] != "" && parsedTerms[count][0] != '#'){
+      return true;
+    }
+    ++count;
+  }
+  return false;
+}
+
 //parsing user queries (format: #latest #question wordToSearch)
 function parseQueryResearch(req){
   let parsed = {}
@@ -841,6 +990,7 @@ function parseQueryResearch(req){
   //debug("results", results);
   return results;
 }
+
 
 function buildSQLQuerySearchEverywhere(queryBegin, parsedTerms, queryEnd){
   let queryResult = queryBegin;
