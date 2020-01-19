@@ -300,7 +300,7 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
       let results = [];
       
       // if /send #id -> display only this poll
-      if (debug ( "debug", query.cmd === '/share')) {
+      if (query.cmd === '/share') {
         
       //checking if poll exists
         const exists = await db.select('count(*) as cnt', 'question', 'closed').from('Poll')
@@ -337,15 +337,42 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
       //#tag, #question and #option
       else{
         
-        let queryResearch = parseQueryResearch(req.body.inline_query.query);
+        let result;
 
+        result = await parseQueryResearch(req.body.inline_query);
+      
+        if (result != undefined && result.length > 0) {
+          
+
+          let msg, key, rid;
+
+          for (var i = 0; i < result.length; i++) {
+          
+
+            const poll = await getDisplayablePoll (result[i].rid);
+            msg = poll.text;
+            key = poll.keyboard;
+
+            /*
+            rid = result[i].rid;
+            
+            key = poll.keyboard.slice(0,2);
+            delete key[1][0].callback_data;
+            key[1][0].url = 'telegram.me/BestOptionBot?start=' + rid.substring(1).replace(':', '-');
+            */
+
+            results.push( { id: result[i].rid, 
+                            input_message_content: {message_text: msg, parse_mode: 'markdown'},
+                            type: "article",
+                            title: result[i].question,
+                            reply_markup: {inline_keyboard:   key}
+            });
+            
+          }
+            
+          
+        }
         
-        results.push( { id: query.poll, 
-          input_message_content: {message_text: msg, parse_mode: 'markdown'},
-          type: "article",
-          title: exists.question,
-          reply_markup: {inline_keyboard: key}
-       });
       }
   
       if (results.length === 0) {
@@ -358,6 +385,7 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
 //                        url: "google.com"
 //                       })
       }
+      debug('results', results)
       answerInline (req.body.inline_query.id, results);
     }
     
@@ -769,56 +797,91 @@ function parseQuery (query) {
 };
 
 //parsing user queries (format: #latest #question wordToSearch)
-async function parseQueryResearch(query){
+function parseQueryResearch(req){
   let parsed = {}
-  parsed.cmd = query.substring(query.indexOf('#'), query.indexOf(' '));
+  parsed.cmd = req.query.substring(req.query.indexOf('#'), req.query.indexOf(' ') == -1 ? req.query.length : req.query.indexOf(' '));
   let results;
   let finalQuery;
-  
-
+  debug("cmd", parsed.cmd);
+  console.log(parsed.cmd);
+  console.log(req.query);
   switch(parsed.cmd){
+    
     case "#oldest":
-      results = await db.query(`SELECT date, question, public, closed FROM Poll WHERE creator = ${req.body.inline_query.from.id} OR public = true ORDER BY date ASC`);
+      results =  db.query(`SELECT @rid as rid, date, question, public, closed FROM Poll WHERE creator = ${req.from.id} OR public = true ORDER BY date ASC`);
       break;
     case "#latest":
-      results = await db.query(`SELECT date, question, public, closed FROM Poll WHERE creator = ${req.body.inline_query.from.id} OR public = true ORDER BY date DESC`);
+      results =  db.query(`SELECT @rid as rid, date, question, public, closed FROM Poll WHERE creator = ${req.from.id} OR public = true ORDER BY date DESC`);
+      debug('results parseQueryResearch', results);
       break;
     case "#popular":
-      results = await db.query(`select question, date, public, closed, creator.name as creator, creator.id as creatorId, out("PollAnswer").text as answers, out("HasTag").name as tags, $votes.cnt as nbVotes from Poll let $votes=(select count(*) as cnt from AnsweredPoll where in=#33:0) where @rid=#33:0)`);
+      results =  db.query(`SELECT @rid as rid, count( in(AnsweredPoll)), date, question, public, closed FROM Poll WHERE (creator = ${req.from.id} OR public = true)  GROUP BY @rid ORDER BY cnt DESC`);
       break;
     case "#tag":
-      parsed.terms = browseTerms(query.substring(query.indexOf(' ') + 1));
-      finalQuery = buildSQLQueryIN(`SELECT date, question, public, closed, out("HasTag").name as tags FROM Poll WHERE (creator = ${req.body.inline_query.from.id} OR public = true)`, parsed.terms, `out("HasTag").name`, ` ORDER BY date ASC`)
-      results = await db.query(finalQuery);
+      parsed.terms = req.query.split(' ');
+      finalQuery = buildSQLQueryIN(`SELECT @rid as rid, date, question, public, closed, out("HasTag").name as tags FROM Poll WHERE (creator = ${req.from.id} OR public = true)`, parsed.terms, `out("HasTag").name`, ` ORDER BY date ASC`);
+      results =  db.query(finalQuery);
       break;
     case "#question":
-      parsed.terms = browseTerms(query.substring(query.indexOf(' ') + 1));
-      finalQuery = buildSQLQueryContains(`SELECT date, question, public, closed FROM Poll WHERE (creator  = ${req.body.inline_query.from.id} OR public = true)`, parsedTerms, ` ORDER BY date ASC)`);
-      results = await db.query(finalQuery);
+      parsed.terms = req.query.split(' ');
+      finalQuery = buildSQLQueryContains(`SELECT @rid as rid, date, question, public, closed FROM Poll WHERE (creator  = ${req.from.id} OR public = true)`, parsed.terms, ` ORDER BY date ASC)`);
+      results =  db.query(finalQuery);
       break;
     case "#option":
-      parsed.terms = browseTerms(query.substring(query.indexOf(' ') + 1));
-      finalQuery = buildSQLQueryIN(`SELECT date, question, public, closed,  out("PollAnswer").text as answers FROM Poll WHERE (creator = ${req.body.inline_query.from.id} OR public = true)`, parsed.terms, `out("PollAnswer").text`, ` ORDER BY date ASC`)
-      results = await db.query(finalQuery);
+      parsed.terms = req.query.split(' ');
+      finalQuery = buildSQLQueryIN(`SELECT @rid as rid, date, question, public, closed,  out("PollAnswer").text as answers FROM Poll WHERE (creator = ${req.from.id} OR public = true)`, parsed.terms, `out("PollAnswer").text`, ` ORDER BY date ASC`);
+      results =  db.query(finalQuery);
       break;
     default:
-      parsed.terms = browseTerms(query);
+      parsed.terms = req.query.split(' ');
+      finalQuery = buildSQLQuerySearchEverywhere(`SELECT @rid as rid, date, question, public, closed, out("HasTag").name as tags FROM Poll WHERE (creator = ${req.from.id} OR public = true)`, parsed.terms, ` ORDER BY date ASC`);
+      results = db.query(finalQuery);
       break;
   }
-  return parsed;
+  //debug("results", results);
+  return results;
+}
+
+function buildSQLQuerySearchEverywhere(queryBegin, parsedTerms, queryEnd){
+  let queryResult = queryBegin;
+
+  if(parsedTerms.length != 0){
+    queryResult += ` AND (`
+    for (var i = 0; i < parsedTerms.length; i++) {
+      if(parsedTerms[i][0] != '#' || i == 0){
+        if(i != 0){
+          queryResult += ` OR `;
+        }
+        queryResult+= `(question containsText ` + "\"" + parsedTerms[i]  + "\"" + `) OR `;
+        queryResult+= `(` +  "\"" + parsedTerms[i] + "\"" + ` IN out("HasTag").name) OR `;
+        queryResult+= `(` +  "\"" + parsedTerms[i] + "\"" + ` IN out("PollAnswer").text)`;
+      }else if (i != 0){
+        i = parsedTerms.length;
+      }
+    }
+    queryResult += `)`;
+  }
+
+  queryResult += queryEnd;
+  return queryResult;
+
 }
 
 function buildSQLQueryContains(queryBegin, parsedTerms, queryEnd){
   
   let queryResult = queryBegin;
   
-  if(parsedTerms.length > 0){
+  if((parsedTerms.length != (0 || 1) && parsedTerms[0][0] == '#')){
     queryResult += ` AND (`
     for (var i = 0; i < parsedTerms.length; i++) {
-      if(i != 0){
-        queryResult += ` OR `;
+      if(parsedTerms[i][0] != '#'){
+        if((i != (0 || 1) && parsedTerms[0][0] == '#')){
+          queryResult += ` OR `;
+        }
+        queryResult+= `(question containsText ` + "\"" + parsedTerms[i]  + "\"" + `)`;
+      }else if (i != 0){
+        i = parsedTerms.length;
       }
-      queryResult+= `(question containsText ` + parsedTerms[i] + `)`;
     }
     queryResult += `)`;
   }
@@ -831,13 +894,17 @@ function buildSQLQueryIN(queryBegin, parsedTerms, inCondition, queryEnd){
   
   let queryResult = queryBegin;
 
-  if(parsedTerms.length > 0){
+  if(parsedTerms.length != (0 || 1) && parsedTerms[0][0] == '#'){
     queryResult += ` AND (`
     for (var i = 0; i < parsedTerms.length; i++) {
-      if(i != 0){
-        queryResult += ` OR `;
+      if(parsedTerms[i][0] != '#'){
+        if((i != (0 || 1) && parsedTerms[0][0] == '#')){
+          queryResult += ` OR `;
+        }
+        queryResult+= `(` +  "\"" + parsedTerms[i] + "\"" + ` IN ` + inCondition + `)`;
+      }else if (i != 0){
+        i = parsedTerms.length;
       }
-      queryResult+= `(` + parsedTerms[i] + ` IN ` + inCondition + `)`;
     }
     queryResult += `)`;
   }
@@ -846,17 +913,11 @@ function buildSQLQueryIN(queryBegin, parsedTerms, inCondition, queryEnd){
   return queryResult;
 }
 
-function browseTerms(query){
-  let count = 0;
-  let termsAcc = [];
-  while(count != query.indexOf('#') && count < query.length){
-    indexNextTerm = query.indexOf(' ');
 
-    termsAcc.push(query.substring(count, (indexNextTerm == -1 ? query.length - 1 : indexNextTerm)));
-    count = indexNextTerm;
-    query = query.substring(indexNextTerm);
-  }
-  return termsAcc;
+
+
+function getPosition(string, subString, index) {
+  return string.split(subString, index).join(subString).length;
 }
 
 // computes the levenstein distance for 2 words
