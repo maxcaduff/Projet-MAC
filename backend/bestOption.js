@@ -906,11 +906,9 @@ function parseQuerySearch(parsedTerms, index){
             
             index++;
           }
-          try{
+          
             tmp = parseQuerySearch(parsedTerms, index);
-          }catch(RangeError){
-            console.log("RangeError");
-          }
+          
           queryMiddle.middle += tmp.middle;
           queryMiddle.orderBy = tmp.orderBy;
           break;
