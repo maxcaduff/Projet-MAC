@@ -16,7 +16,7 @@ This bot implements the [majority judgement](https://en.wikipedia.org/wiki/Major
 
 ### Constraints
 
-* a private poll can only be shared by the creator and visible only by the people to whom he shared it
+* a private poll can only be visible by the people to whom he has been shared with
 * everyone can vote once in a poll that is accessible to them
 
 ### Choice of technologies
