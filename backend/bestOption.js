@@ -333,13 +333,11 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
       }
       
       // TODO high: handle search with keywords (#latest, #popular, etc) 
-      //query.poll. S'asssurer que le latest poll soit dans les privé du user ou dans les public
-      //#tag, #question and #option
       else{
         
         parsedTerms = req.body.inline_query.query.split(' ');
         let query = `SELECT @rid as rid, count( in(AnsweredPoll)), date, question, public, closed FROM Poll WHERE (creator = ${req.body.inline_query.from.id} OR public = true)`
-        let queryMiddle = parseQuerySearch(parsedTerms, 0, req.body.inline_query.query);
+        let queryMiddle = parseQuerySearch(parsedTerms, 0);
 
         if(queryMiddle.orderBy == undefined){           //Default order by date ASC
           queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date ASC`;
@@ -376,36 +374,6 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
           
         }
 
-        /*let result;
-
-        result = await parseQueryResearch(req.body.inline_query);
-      
-        if (result != undefined && result.length > 0) {
-          
-
-          let msg, key, rid;
-
-          for (var i = 0; i < result.length; i++) {
-          
-
-            const poll = await getDisplayablePoll (result[i].rid);
-            msg = poll.text;
-            key = poll.keyboard;
-
-           
-
-            results.push( { id: result[i].rid, 
-                            input_message_content: {message_text: msg, parse_mode: 'markdown'},
-                            type: "article",
-                            title: result[i].question,
-                            reply_markup: {inline_keyboard:   key}
-            });
-            
-          }
-            
-          
-        }*/
-        
       }
   
       if (results.length === 0) {
@@ -829,6 +797,8 @@ function parseQuery (query) {
   return parsed;
 };
 
+
+//parsing user queries (format: #latest #question wordToSearch)
 function parseQuerySearch(parsedTerms, index){
 
   let queryMiddle, tmp;
@@ -837,98 +807,118 @@ function parseQuerySearch(parsedTerms, index){
   queryMiddle.orderBy = undefined;
   queryMiddle.middle = ``;
 
-  if(index < parsedTerms.length){
-    switch(parsedTerms[index]){
-      
-      case "#oldest":
-        queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date ASC`;
-        index++;
-        if(index < parsedTerms.length){
+  
+  
+    if(index < parsedTerms.length){
+      switch(parsedTerms[index]){
+        
+        case "#oldest":
+          queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date ASC`;
+          index++;
+          if(index < parsedTerms.length){
+            tmp = parseQuerySearch(parsedTerms, index);
+            queryMiddle.middle += tmp.middle;
+          }
+          break;
+        case "#latest":
+          queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date DESC`;
+          index++;
+          if(index < parsedTerms.length){
+            tmp = parseQuerySearch(parsedTerms, index);
+            queryMiddle.middle += tmp.middle;
+          }
+          break;
+        case "#popular":
+          queryMiddle.orderBy =  ` GROUP BY @rid ORDER BY cnt DESC`;
+          index++;
+          if(index < parsedTerms.length){
+            tmp = parseQuerySearch(parsedTerms, index);
+            queryMiddle.middle += tmp.middle;
+          }
+          break;
+        case "#tag":
+          index++;
+          while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
+            if(parsedTerms[index] != ""){
+              if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
+                queryMiddle.middle += ` OR `
+              }
+              
+              queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) `;
+              
+            }
+            index++;
+          }
           tmp = parseQuerySearch(parsedTerms, index);
           queryMiddle.middle += tmp.middle;
-        }
-        break;
-      case "#latest":
-        queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date DESC`;
-        index++;
-        if(index < parsedTerms.length){
+          queryMiddle.orderBy = tmp.orderBy;
+          break;
+        case "#question":
+          index++;
+          while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
+            if(parsedTerms[index] != ""){
+              if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
+                queryMiddle.middle += ` OR `
+              }
+              
+              queryMiddle.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) `;
+              
+            }
+            index++;
+          }
           tmp = parseQuerySearch(parsedTerms, index);
           queryMiddle.middle += tmp.middle;
-        }
-        break;
-      case "#popular":
-        queryMiddle.orderBy =  ` GROUP BY @rid ORDER BY cnt DESC`;
-        index++;
-        if(index < parsedTerms.length){
+          queryMiddle.orderBy = tmp.orderBy;
+          break;
+        case "#option":
+          index++;
+          while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
+            
+            if(parsedTerms[index] != ""){
+              if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
+                queryMiddle.middle += ` OR `
+              }
+              
+              queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
+              
+            }
+            index++;
+          }
           tmp = parseQuerySearch(parsedTerms, index);
           queryMiddle.middle += tmp.middle;
-        }
-        break;
-      case "#tag":
-        index++;
-        while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
-          
-          if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
-            queryMiddle.middle += ` OR `
+          queryMiddle.orderBy = tmp.orderBy;
+          break;
+        default:
+          while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
+            
+            if(parsedTerms[index] != ""){
+              if(index != 0 && checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
+                queryMiddle.middle += ` OR `
+              }
+              
+              queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) OR `
+              queryMiddle.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) OR `;
+              queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
+            
+            }
+            
+            index++;
           }
-          queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) `;
-          index++;
-        }
-        tmp = parseQuerySearch(parsedTerms, index);
-        queryMiddle.middle += tmp.middle;
-        queryMiddle.orderBy = tmp.orderBy;
-        break;
-      case "#question":
-        console.log("question")
-        index++;
-        while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
-          
-          if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
-            queryMiddle.middle += ` OR `
+          try{
+            tmp = parseQuerySearch(parsedTerms, index);
+          }catch(RangeError){
+            console.log("RangeError");
           }
-          queryMiddle.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) `;
-          index++;
-        }
-        tmp = parseQuerySearch(parsedTerms, index);
-        queryMiddle.middle += tmp.middle;
-        queryMiddle.orderBy = tmp.orderBy;
-        break;
-      case "#option":
-        index++;
-        while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
-          
-          if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
-            queryMiddle.middle += ` OR `
-          }
-          
-          queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
-          index++;
-        }
-        tmp = parseQuerySearch(parsedTerms, index);
-        queryMiddle.middle += tmp.middle;
-        queryMiddle.orderBy = tmp.orderBy;
-        break;
-      default:
-        while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
-          
-          if(index != 0 && checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
-            queryMiddle.middle += ` OR `
-          }
-          
-          queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) OR `
-          queryMiddle.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) OR `;
-          queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
-          index++;
-        }
-        tmp = parseQuerySearch(parsedTerms, index);
-        queryMiddle.middle += tmp.middle;
-        queryMiddle.orderBy = tmp.orderBy;
-        break;
+          queryMiddle.middle += tmp.middle;
+          queryMiddle.orderBy = tmp.orderBy;
+          break;
+      }
+      //debug("results", results);
     }
-    //debug("results", results);
-  }
+  
+    console.log(queryMiddle)
+  
 
-  console.log(queryMiddle)
   return queryMiddle;
 
 }
@@ -945,130 +935,7 @@ function checkingFirstChar(parsedTerms, index){
   return false;
 }
 
-//parsing user queries (format: #latest #question wordToSearch)
-function parseQueryResearch(req){
-  let parsed = {}
-  parsed.cmd = req.query.substring(req.query.indexOf('#'), req.query.indexOf(' ') == -1 ? req.query.length : req.query.indexOf(' '));
-  let results;
-  let finalQuery;
-  debug("cmd", parsed.cmd);
-  console.log(parsed.cmd);
-  console.log(req.query);
-  switch(parsed.cmd){
-    
-    case "#oldest":
-      results =  db.query(`SELECT @rid as rid, date, question, public, closed FROM Poll WHERE creator = ${req.from.id} OR public = true ORDER BY date ASC`);
-      break;
-    case "#latest":
-      results =  db.query(`SELECT @rid as rid, date, question, public, closed FROM Poll WHERE creator = ${req.from.id} OR public = true ORDER BY date DESC`);
-      debug('results parseQueryResearch', results);
-      break;
-    case "#popular":
-      results =  db.query(`SELECT @rid as rid, count( in(AnsweredPoll)), date, question, public, closed FROM Poll WHERE (creator = ${req.from.id} OR public = true)  GROUP BY @rid ORDER BY cnt DESC`);
-      break;
-    case "#tag":
-      parsed.terms = req.query.split(' ');
-      finalQuery = buildSQLQueryIN(`SELECT @rid as rid, date, question, public, closed, out("HasTag").name as tags FROM Poll WHERE (creator = ${req.from.id} OR public = true)`, parsed.terms, `out("HasTag").name`, ` ORDER BY date ASC`);
-      results =  db.query(finalQuery);
-      break;
-    case "#question":
-      parsed.terms = req.query.split(' ');
-      finalQuery = buildSQLQueryContains(`SELECT @rid as rid, date, question, public, closed FROM Poll WHERE (creator  = ${req.from.id} OR public = true)`, parsed.terms, ` ORDER BY date ASC)`);
-      results =  db.query(finalQuery);
-      break;
-    case "#option":
-      parsed.terms = req.query.split(' ');
-      finalQuery = buildSQLQueryIN(`SELECT @rid as rid, date, question, public, closed,  out("PollAnswer").text as answers FROM Poll WHERE (creator = ${req.from.id} OR public = true)`, parsed.terms, `out("PollAnswer").text`, ` ORDER BY date ASC`);
-      results =  db.query(finalQuery);
-      break;
-    default:
-      parsed.terms = req.query.split(' ');
-      finalQuery = buildSQLQuerySearchEverywhere(`SELECT @rid as rid, date, question, public, closed, out("HasTag").name as tags FROM Poll WHERE (creator = ${req.from.id} OR public = true)`, parsed.terms, ` ORDER BY date ASC`);
-      results = db.query(finalQuery);
-      break;
-  }
-  //debug("results", results);
-  return results;
-}
 
-
-function buildSQLQuerySearchEverywhere(queryBegin, parsedTerms, queryEnd){
-  let queryResult = queryBegin;
-
-  if(parsedTerms.length != 0){
-    queryResult += ` AND (`
-    for (var i = 0; i < parsedTerms.length; i++) {
-      if(parsedTerms[i][0] != '#' || i == 0){
-        if(i != 0){
-          queryResult += ` OR `;
-        }
-        queryResult+= `(question containsText ` + "\"" + parsedTerms[i]  + "\"" + `) OR `;
-        queryResult+= `(` +  "\"" + parsedTerms[i] + "\"" + ` IN out("HasTag").name) OR `;
-        queryResult+= `(` +  "\"" + parsedTerms[i] + "\"" + ` IN out("PollAnswer").text)`;
-      }else if (i != 0){
-        i = parsedTerms.length;
-      }
-    }
-    queryResult += `)`;
-  }
-
-  queryResult += queryEnd;
-  return queryResult;
-
-}
-
-function buildSQLQueryContains(queryBegin, parsedTerms, queryEnd){
-  
-  let queryResult = queryBegin;
-  
-  if((parsedTerms.length != (0 || 1) && parsedTerms[0][0] == '#')){
-    queryResult += ` AND (`
-    for (var i = 0; i < parsedTerms.length; i++) {
-      if(parsedTerms[i][0] != '#'){
-        if((i != (0 || 1) && parsedTerms[0][0] == '#')){
-          queryResult += ` OR `;
-        }
-        queryResult+= `(question containsText ` + "\"" + parsedTerms[i]  + "\"" + `)`;
-      }else if (i != 0){
-        i = parsedTerms.length;
-      }
-    }
-    queryResult += `)`;
-  }
-  
-  queryResult += queryEnd;
-  return queryResult;
-}
-
-function buildSQLQueryIN(queryBegin, parsedTerms, inCondition, queryEnd){
-  
-  let queryResult = queryBegin;
-
-  if(parsedTerms.length != (0 || 1) && parsedTerms[0][0] == '#'){
-    queryResult += ` AND (`
-    for (var i = 0; i < parsedTerms.length; i++) {
-      if(parsedTerms[i][0] != '#'){
-        if((i != (0 || 1) && parsedTerms[0][0] == '#')){
-          queryResult += ` OR `;
-        }
-        queryResult+= `(` +  "\"" + parsedTerms[i] + "\"" + ` IN ` + inCondition + `)`;
-      }else if (i != 0){
-        i = parsedTerms.length;
-      }
-    }
-    queryResult += `)`;
-  }
-  
-  queryResult += queryEnd;
-  return queryResult;
-}
-
-
-
-
-function getPosition(string, subString, index) {
-  return string.split(subString, index).join(subString).length;
-}
 
 // computes the levenstein distance for 2 words
 function stringDistance (str1, str2) {
