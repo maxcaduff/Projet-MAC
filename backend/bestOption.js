@@ -339,48 +339,48 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
       else{
         
         
-        parsedTerms = req.body.inline_query.query.split(' ').filter(function(value, index, arr){
-        
-          return value != "";
-      
-      });
+        let parsedTerms = req.body.inline_query.query.split(' ').filter(value => value !== '');
+        if (parsedTerms.length > 1) {
+            let query = `SELECT @rid as rid, count( in(AnsweredPoll)), date, question, public, closed FROM Poll WHERE (creator = ${req.body.inline_query.from.id} OR public = true)`
+            let queryMiddle = parseQuerySearch(parsedTerms, 0);
+
+            if (queryMiddle.orderBy == undefined) {           //Default order by date ASC
+                queryMiddle.orderBy = `  GROUP BY @rid ORDER BY date ASC`;
+            }
+
+            if (queryMiddle.middle != ``) {
+                query += ` AND ( ` + queryMiddle.middle + ` ) `;
+            }
+
+            console.log(query + queryMiddle.orderBy);
+            let result = await db.query(query + queryMiddle.orderBy);
+
+            if (result != undefined && result.length > 0) {
+
+                let msg, key;
+
+                for (var i = 0; i < result.length; i++) {
 
 
-        let query = `SELECT @rid as rid, count( in(AnsweredPoll)), date, question, public, closed FROM Poll WHERE (creator = ${req.body.inline_query.from.id} OR public = true)`
-        let queryMiddle = parseQuerySearch(parsedTerms, 0);
+                    const poll = await getDisplayablePoll(result[i].rid);
+                    msg = poll.text;
 
-        if(queryMiddle.orderBy == undefined){           //Default order by date ASC
-          queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date ASC`;
-        }
+                    key = [[{
+                        text: `share${poll.closed ? ' results' : ''}`,
+                        switch_inline_query: `/share ${result[i].rid}`
+                    }]];
 
-        if(queryMiddle.middle != ``){
-          query += ` AND ( ` + queryMiddle.middle +  ` ) `;
-        }
+                    results.push({
+                        id: result[i].rid,
+                        input_message_content: {message_text: msg, parse_mode: 'markdown'},
+                        type: "article",
+                        title: result[i].question,
+                        reply_markup: {inline_keyboard: key}
+                    });
 
-        console.log(query + queryMiddle.orderBy);
-        let result = await db.query(query + queryMiddle.orderBy);
-        
-        if (result != undefined && result.length > 0) {
-          
-          let msg, key;
+                }
 
-          for (var i = 0; i < result.length; i++) {
-          
-
-            const poll = await getDisplayablePoll (result[i].rid);
-            msg = poll.text;
-
-            key = [[{text: `share${poll.closed ? ' results':''}`, switch_inline_query: `/share ${result[i].rid}`}]];
-           
-            results.push( { id: result[i].rid, 
-                            input_message_content: {message_text: msg, parse_mode: 'markdown'},
-                            type: "article",
-                            title: result[i].question,
-                            reply_markup: {inline_keyboard:   key}
-            });
-            
-          }  
-          
+            }
         }
 
       }
