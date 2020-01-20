@@ -27,6 +27,9 @@ let voteState = new Map();
 const rates = ['no opinion', 'bad', 'poor', 'fair', 'good', 'excellent'];
 const emojisRates = ['','😡','😠','😐','😊','😀'];
 const pageSize = 5;
+const botName = 'BestOptionBot';
+
+
 
 // getting saved state:
 JSON.parse(fs.readFileSync('./creationStateBackup.json')).reduce((m, [key, val])=> m.set(key, val) , creationState);
@@ -320,7 +323,7 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
             // changing buttons, since no msg is sent in an inline update.(Must answer poll in chat with bot)
             key = poll.keyboard.slice(0,2);
             delete key[1][0].callback_data;
-            key[1][0].url = 'telegram.me/BestOptionBot?start=' + query.poll.substring(1).replace(':', '-');
+            key[1][0].url = 'telegram.me/' + botName + '?start=' + query.poll.substring(1).replace(':', '-');
           }
             
           results.push( { id: query.poll, 
@@ -352,17 +355,16 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
         
         if (result != undefined && result.length > 0) {
           
-          let msg, key, rid;
+          let msg, key;
 
           for (var i = 0; i < result.length; i++) {
           
 
             const poll = await getDisplayablePoll (result[i].rid);
             msg = poll.text;
-            key = poll.keyboard;
 
+            key = [[{text: `share${poll.closed ? ' results':''}`, switch_inline_query: `/share ${result[i].rid}`}]];
            
-
             results.push( { id: result[i].rid, 
                             input_message_content: {message_text: msg, parse_mode: 'markdown'},
                             type: "article",
@@ -609,7 +611,7 @@ async function getBasicPollInfo (pollId) {
 // returns formatted question and answers, along with inline keyboard to take actions.
 async function getDisplayablePoll (pollRid, userId) {
   
-  let poll = await db.query( 'select question, date, public, closed, creator.name as creator, creator.id as creatorId, out("PollAnswer").text as answers, out("HasTag").name as tags, $votes.cnt as nbVotes from Poll let $votes=(select count(*) as cnt from AnsweredPoll where in="'+pollRid+'") where @rid="'+pollRid+'"');
+  let poll = await db.query( 'select @rid as rid, question, date, public, closed, creator.name as creator, creator.id as creatorId, out("PollAnswer").text as answers, out("HasTag").name as tags, $votes.cnt as nbVotes from Poll let $votes=(select count(*) as cnt from AnsweredPoll where in="'+pollRid+'") where @rid="'+pollRid+'"');
   poll = poll[0];
   
   let userVoteState = {};
@@ -858,7 +860,7 @@ function parseQuerySearch(parsedTerms, index){
           while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
             if(parsedTerms[index] != ""){
               if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
-                queryMiddle.middle += ` OR `
+                queryMiddle.middle += ` AND `
               }
               
               queryMiddle.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) `;
