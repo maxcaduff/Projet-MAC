@@ -338,7 +338,14 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
       // TODO high: handle search with keywords (#latest, #popular, etc) 
       else{
         
-        parsedTerms = req.body.inline_query.query.split(' ');
+        
+        parsedTerms = req.body.inline_query.query.split(' ').filter(function(value, index, arr){
+        
+          return value != "";
+      
+      });
+
+
         let query = `SELECT @rid as rid, count( in(AnsweredPoll)), date, question, public, closed FROM Poll WHERE (creator = ${req.body.inline_query.from.id} OR public = true)`
         let queryMiddle = parseQuerySearch(parsedTerms, 0);
 
@@ -842,8 +849,8 @@ function parseQuerySearch(parsedTerms, index){
           index++;
           while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
             if(parsedTerms[index] != ""){
-              if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
-                queryMiddle.middle += ` OR `
+              if(checkingFirstChar(parsedTerms, 0, index)){ //Verify that there is not several # in a row
+                queryMiddle.middle += ` OR `;
               }
               
               queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) `;
@@ -855,18 +862,27 @@ function parseQuerySearch(parsedTerms, index){
           queryMiddle.middle += tmp.middle;
           queryMiddle.orderBy = tmp.orderBy;
           break;
-        case "#question":
+        case "#question":                               //phrase query
           index++;
+          let indexBegin = index;
+          let parenthesis;
+          if(checkingFirstChar(parsedTerms, 0, index)){ //Verify that there is not several # in a row
+            queryMiddle.middle += ` OR (`;
+            parenthesis = true;
+          }
           while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
             if(parsedTerms[index] != ""){
-              if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
-                queryMiddle.middle += ` AND `
+              if(checkingFirstChar(parsedTerms, indexBegin, index)){ //Verify that there is not several # in a row to avoid to put an OR and an AND in a row
+                queryMiddle.middle += ` AND `;
               }
               
               queryMiddle.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) `;
               
             }
             index++;
+          }
+          if(parenthesis){
+            queryMiddle.middle += ` ) `;
           }
           tmp = parseQuerySearch(parsedTerms, index);
           queryMiddle.middle += tmp.middle;
@@ -877,8 +893,8 @@ function parseQuerySearch(parsedTerms, index){
           while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
             
             if(parsedTerms[index] != ""){
-              if(checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
-                queryMiddle.middle += ` OR `
+              if(checkingFirstChar(parsedTerms, 0, index)){ //Verify that there is not several # in a row
+                queryMiddle.middle += ` OR `;
               }
               
               queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
@@ -894,8 +910,8 @@ function parseQuerySearch(parsedTerms, index){
           while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
             
             if(parsedTerms[index] != ""){
-              if(index != 0 && checkingFirstChar(parsedTerms, index)){ //Verify that there is not several # in a row
-                queryMiddle.middle += ` OR `
+              if(index != 0 && checkingFirstChar(parsedTerms, 0, index)){ //Verify that there is not several # in a row
+                queryMiddle.middle += ` OR `;
               }
               
               queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) OR `
@@ -923,10 +939,10 @@ function parseQuerySearch(parsedTerms, index){
 
 }
 
-//Check the first char of the array till the index index to see if all the first char are # (ex: ([#latest, #tag, #question, is, there], 2) = false)
-function checkingFirstChar(parsedTerms, index){
-  let count = 0;
-  while(count < index){
+//Check the first char of the array till the index indexEnd to see if all the first char are # (ex: ([#latest, #tag, #question, is, there], 2) = false)
+function checkingFirstChar(parsedTerms, indexBegin, indexEnd){
+  let count = indexBegin;
+  while(count < indexEnd){
     if(parsedTerms[count] != "" && parsedTerms[count][0] != '#'){
       return true;
     }
