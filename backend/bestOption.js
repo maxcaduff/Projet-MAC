@@ -27,7 +27,7 @@ let voteState = new Map();
 const rates = ['no opinion', 'bad', 'poor', 'fair', 'good', 'excellent'];
 const emojisRates = ['','😡','😠','😐','😊','😀'];
 const pageSize = 5;
-const botName = 'BestOptionBot';
+const botUsername = 'BestOptionBot';
 
 
 
@@ -323,7 +323,7 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
             // changing buttons, since no msg is sent in an inline update.(Must answer poll in chat with bot)
             key = poll.keyboard.slice(0,2);
             delete key[1][0].callback_data;
-            key[1][0].url = 'telegram.me/' + botName + '?start=' + query.poll.substring(1).replace(':', '-');
+            key[1][0].url = 'telegram.me/' + botUsername + '?start=' + query.poll.substring(1).replace(':', '-');
           }
             
           results.push( { id: query.poll, 

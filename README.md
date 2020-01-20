@@ -6,6 +6,26 @@ Caduff Max, Thomas Benjamin
 ### Purpose
 This bot implements the [majority judgement](https://en.wikipedia.org/wiki/Majority_judgment) (MJ), which is a still-not-perfect-but-better voting system than traditional "which is the best". MJ allows to rate each option with a grade from bad to excellent, and uses the median and some computations to choose the option best liked by most.
 
+### Specification
+
+* be able to create a poll, public or private, with a question and options to evaluate
+* be able to share the poll with a specific audience
+* be able to vote and change your vote
+* ability to obtain statistics on polls
+* be able to search public polls, or retrieve the most recent or popular
+
+### Constraints
+
+* a private poll can only be shared by the creator and visible only by the people to whom he shared it
+* everyone can vote once in a poll that is accessible to them
+
+### Choice of technologies
+
+__Mail client__: Telegram, which has a rich API for managing bots.
+
+__Database__: OrientDB, graph database, allowing you to easily manage the links between surveys, users and responses.
+
+__Server back end__: Express, which allows you to create a javascript server responding to requests.
 
 ### User interaction
 The bot is initiated with the command "/start". This registers the user in the database and allows to create and answer polls.
@@ -20,7 +40,7 @@ Users can access their different created polls by typing the command "/mypolls",
 Polls must be closed prior to see the results. Only the creator can close the poll. A future update could implement a delay after which the poll automatically closes. When the poll is closed, a message with the results is sent by the bot to each participants.  
 Sharing a closed poll also sends results.
 
-Searching polls will be possible by typing @BestOptionBot \<query\>, with filtering keywords starting with # and free terms matched against tags and poll's question. (We could use #tag, #question and #option to look specifically into those fields)
+Searching polls will be possible by typing @BestOptionBot \<query\>, with filtering keywords starting with # and free terms matched against tags and poll's question. (We could use #tag, #question and #option to look specifically into those fields, type #latest, #oldest or #popular to find polls corresponding to these criteria)
 
 Actually votes being anonymous or not is useless, we could implement a button along the results to display an editable message with statistics and public voters for each option.
 
@@ -46,7 +66,19 @@ Sharing polls can be done only with inline queries allowing users to post a mess
 
 Searching for polls (not available yet) could be implemented with standard messages, but it would result in a lot of long messages, inline queries allows to display multiple results without polluting the chat and to send any result in any chat.
 
+### Data Model
 
+![Alt text](dataModel.PNG)
+
+We opted for this model because it seemed to us to correspond best to the schema to which we wanted to structure our data. Indeed, it seemed logical to us to represent the users, the polls, the options, as well as the tags that we added in order to facilitate searches, as vertices. Everything else is only after relationships between the vertices, each of the edges representing a link between a user and a poll, a tag and a poll, a user and an answer, etc...
+
+### Advanced queries
+
+
+
+Advanced queries are performed by recursion. The #s allow you to enter search criteria such as the latest or most popular polls.
+#oldest, #latest and #popular define an order in which to order the returned polls and #tag, #option, #question as well as the free search looks for a match with the terms. In order to ensure results, we opted for OR queries, except for the #question query which is considered a phrase query.
+It was necessary to group the polls by @rid in order to ensure correct results due to the potential recovery of the variable count (in (AnsweredPoll)) (the number of people who answered a given poll).
 
 ### Launch steps
 
@@ -55,8 +87,13 @@ Searching for polls (not available yet) could be implemented with standard messa
 * start ngrok to redirect your port 8080 (`$ ngrok http 8080`)
 * set the new ngrok address for the webhook e.g. with postman (see [Telegram API](https://core.telegram.org/bots/api#setwebhook))  
 from the backend folder:
+![Alt text](postmanWhatToDo.PNG)
 * get your api key from [Botfather](https://t.me/botfather) and set it (`$ echo 'yourKey' > apiKey`), you thought I'd give mine? =p
+    - For that contact BotFather and type the command `/newbot`
+    - Follow the instructions
+    - Enable the inline queries by typing the command `/mybots`
+    - Choose your bot, the bot settings button and then the inline mode.
+    - Turn it on and add a placeholder "search..."
+* if necessary, create the two empty JSON files creationSateBackup.json and voteStateBackup.json containing only `[]`
+* change the botName variable by your bot username
 * launch the express server : `$ npm install; npm start`. Alternatively to npm start, `$ npm run dev` launches nodemon which reloads on changes.
-
-
-
