@@ -53,7 +53,7 @@ app.post('/', (req, res) => {
       let userState = creationState.get(user);
       
       // if poll is being created:
-      if (userState && !receivedMsg.match(/\/start.*/)) { // allowing to answer a poll even if not finished to create one
+      if (userState && !receivedMsg.match(/\/start.*|\/help/)) { // allowing to answer a new poll even if not finished to create one or to ask for help
         
         const askQuestion = 'Now tell me your question, it should be as precise as possible, remember that people will evaluate each option with a choice between "bad" and "excellent".';
         
@@ -115,7 +115,7 @@ app.post('/', (req, res) => {
           }
           else {
             // stripping unallowed chars
-            let receivedTag = receivedMsg.replace(/[^a-z0-9-]/gi,'').toLowerCase();
+            let receivedTag = receivedMsg.replace(/[^a-z0-9à-ÿ-]/gi,'').toLowerCase();
             
             if (receivedTag.length < 3) {
               sendMessage(chatId, 'Your tag is too short, minimum 3 characters.');
@@ -226,10 +226,13 @@ app.post('/', (req, res) => {
           let pollId = receivedMsg.substring(7);
           if (pollId.match(/\d+\-\d+/)) {
             // clicked vote from shared poll, displaying poll to vote or results if closed.
-            // forging a callback_query to edit the freshly sent message as if user clicked on vote since we can't vote from shared messages -> genius.
             pollId = '#' + pollId.replace('-', ':');
-            
+
             const pollInfo = await getBasicPollInfo (pollId);
+            if (!pollInfo) {
+              sendMessage(chatId, `This poll does not exist ='(`);
+              return;
+            }
             if (pollInfo.closed) {
               const results = await getPollResults(pollId);
               sendMessage(chatId, results.text, results.keyboard, true);
@@ -237,7 +240,10 @@ app.post('/', (req, res) => {
             else {
               const poll = await getDisplayablePoll(pollId, user);
               const sentMsg = await sendMessage(chatId, poll.text, poll.keyboard, true);
-              req.body.callback_query = {from: req.body.message.from, message: sentMsg.result, data: '/startVote ' + pollId};
+              // forging a callback_query to directly edit the freshly sent message as if user clicked on vote -> genius.
+              // (we could also have done a method to directly send a poll in votable state but this method uses existing code.)
+              if (!voteState.get(user)) // if the user didn't finish another poll don't change the message, we need a real query to display the warning
+                req.body.callback_query = {from: req.body.message.from, message: sentMsg.result, data: '/startVote ' + pollId};
             }
           }
           else {
@@ -250,9 +256,13 @@ app.post('/', (req, res) => {
 /create : Create a new poll  
 /help : I hope you already know ;)  
 /mypolls : Get your polls
-Click the button below to search for public polls. You can use specified keywords and free search terms.
+Click the button below to search among public polls and your polls. You can use specified keywords and free search terms.
 *Keywords are:*
-#latest OR #oldest, #mostAnswers OR #leastAnswers, #before yyyy-mm-dd HH:mm, #after yyyy-mm-dd HH:mm`, [[{text: 'search public polls', switch_inline_query_current_chat: '/search'}]], true);
+#oldest, to sort by oldest polls instead of latest,
+#popular OR #unpopular to get results with the most or least votes (only last is taken into account),
+#tag, #question and #option to search the terms you put after them in the respecting fields,
+#limit X to limit to X results, should be between 1 and 30.
+maximum one of each keyword is considered, except for #option.`, [[{text: 'search in public or your polls', switch_inline_query_current_chat: ''}]], true);
           
         }
         
@@ -291,7 +301,7 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
           creationState.set(user, {phase: 0, tags: []});
         }
         else {
-          sendMessage(chatId, 'What you say?');
+          sendMessage(chatId, 'What do you say?');
         }
         
       }
@@ -302,7 +312,7 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
       const query = parseQuery (req.body.inline_query.query);
       let results = [];
       
-      // if /send #id -> display only this poll
+      // if /share #id -> display only this poll
       if (query.cmd === '/share') {
         
       //checking if poll exists
@@ -334,72 +344,73 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
                        });
         }
       }
-      
-      // TODO high: handle search with keywords (#latest, #popular, etc) 
+
+      // handling search with keywords (#latest, #popular, etc)
       else{
-        
-        
-        let parsedTerms = req.body.inline_query.query.split(' ').filter(value => value !== '');
-        if (parsedTerms.length > 1) {
-            let query = `SELECT @rid as rid, count( in(AnsweredPoll)), date, question, public, closed FROM Poll WHERE (creator = ${req.body.inline_query.from.id} OR public = true)`
-            let queryMiddle = parseQuerySearch(parsedTerms, 0);
+        // TODO medium: support #before yyyy-mm-dd HH:mm, #after yyyy-mm-dd HH:mm, #my, #public, #open, #closed
+        let parsedTerms = req.body.inline_query.query.split(' ').map(w => w.replace(/[^\wà-ÿ#-]/g, '')).filter(value => value !== '');
+        if (parsedTerms.length > 0) {
+          debug('parsed', parsedTerms);
+          let queryParsed = parseQuerySearch(parsedTerms);
+          let query = `SELECT @rid as rid, in("AnsweredPoll").size() as nbVotes, date, question, out("HasTag").name as tagList, closed, $opt[0].pert as options, $tags[0].pert as tags 
+FROM Poll ${queryParsed.letTags}${(queryParsed.letOpt ? (queryParsed.letTags ?', ':'let '):'')+ queryParsed.letOpt} WHERE (creator.id = ${req.body.inline_query.from.id} OR public = true) `;
 
-            if (queryMiddle.orderBy == undefined) {           //Default order by date ASC
-                queryMiddle.orderBy = `  GROUP BY @rid ORDER BY date ASC`;
-            }
+          if (queryParsed.middle) {
+            query += `AND ${queryParsed.middle} `;
+          }
 
-            if (queryMiddle.middle != ``) {
-                query += ` AND ( ` + queryMiddle.middle + ` ) `;
-            }
+          // formating simple terms:
+          if (queryParsed.simpleTerms.length) {
+            query += 'AND ('+ queryParsed.simpleTerms.map( cur => `"${cur}" IN out("HasTag").name OR question containsText "${
+                cur}" OR "${cur}" IN out("PollAnswer").text`).join(' OR ') + ') ';
+          }
 
-            console.log(query + queryMiddle.orderBy);
-            let result = await db.query(query + queryMiddle.orderBy);
+          // results are ordered in this table order with existing items: (date desc is the default)
+          let orderBy = [queryParsed.sortByTags, queryParsed.sortByOption, queryParsed.orderByPop, queryParsed.orderByDate || `date DESC`].filter(el => el).join(', ');
+          //debug('orderBy', orderBy);
+          console.log(query + 'ORDER BY '+ orderBy+ ' LIMIT ' + (queryParsed.limit || '5'));
+          let res = await db.query(query + 'ORDER BY '+ orderBy + ' LIMIT ' + (queryParsed.limit || '5'));
 
-            if (result != undefined && result.length > 0) {
+          debug('results', res);
+          console.log('');
 
-                let msg, key;
+          for (let result of res) {
+            let msg = `Poll: *"${result.question}"*
+created on: ${result.date.toString().slice(0,21)} is ${result.closed ? 'closed': 'open'}.
+You can ${result.closed ? 'view results': 'vote'} with the button below.`;
+            //msg = poll.text;//.replace(/[\[\])(~>#+\-=|{}!]/g, char =>`\\`+ char);
+            let key = [[{text: `share ${result.closed ? 'results' : 'poll'}`, switch_inline_query: `/share ${result.rid}`}]];
+            key[0].unshift(result.closed ? {text: 'view results (sent to you)', callback_data: `/viewResults ${result.rid}`} :
+                {text: 'vote', url: `telegram.me/${botUsername}?start=${result.rid.toString().substring(1).replace(':', '-')}`});
 
-                for (var i = 0; i < result.length; i++) {
+            results.push({
+              id: result.rid,
+              input_message_content: {message_text: msg, parse_mode: 'markdown'},
+              type: "article",
+              title: result.question,
+              description: `${result.nbVotes} vote${result.nbVotes>1?'s':''}${result.tagList.length? ', tags: '+result.tagList.join(', ') :''}`,
+              reply_markup: {inline_keyboard: key}
+            });
 
+          }
 
-                    const poll = await getDisplayablePoll(result[i].rid);
-                    msg = poll.text;
-
-                    key = [[{
-                        text: `share${poll.closed ? ' results' : ''}`,
-                        switch_inline_query: `/share ${result[i].rid}`
-                    }]];
-
-                    results.push({
-                        id: result[i].rid,
-                        input_message_content: {message_text: msg, parse_mode: 'markdown'},
-                        type: "article",
-                        title: result[i].question,
-                        reply_markup: {inline_keyboard: key}
-                    });
-
-                }
-
-            }
         }
+      }
 
-      }
-  
       if (results.length === 0) {
-        // TODO low set better default answer: send 5 latest public polls?
-        
-//        results.push(  {id: "help", 
-//                        input_message_content: {message_text: "help!"},
-//                        type: "article",
-//                        title: "click me to get help",
-//                        url: "google.com"
-//                       })
+        //
+        results.push(  {id: "help",
+            input_message_content: {message_text: `[check more infos here!](https://github.com/maxcaduff/Projet-MAC#advanced-queries)`, parse_mode: 'markdown'},
+            type: "article",
+            title: "No Results",
+            description: 'click me to get more details on how search works'
+        })
       }
-      debug('results', results)
+      //debug('results', results);
       answerInline (req.body.inline_query.id, results);
     }
     
-    // handling callback buttons voting process
+    // handling callback buttons (voting process)
     if (req.body.callback_query && req.body.callback_query.message) { // callback from a non-inline message
       
       const chatId = req.body.callback_query.message.chat.id;
@@ -412,7 +423,14 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
       let msg = '';
       let keyboard = [];
       let notifBody = '';
-      
+      let wrongState = false;
+
+      if (query.cmd.match(/\/vote|\/anonymous/) && (!userVote || userVote.message !== msgId)) {
+        query.cmd = '/update';
+        notifBody += 'This message state was invalid, please try again. ';
+        wrongState = true;
+      }
+
       if (query.cmd === '/close') {
         // closing poll and sending results to everyone participating
         await db.update("Poll").set({closed: true}).where({'@rid': query.poll}).one();
@@ -432,7 +450,14 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
           // TODO low: command to check who voted for what via button attached to answers. (sends updatable message with answers on a callback keyboard to check results for each, otherwise message way too long. Format: Answer: X, no opinion: bob, bill & 12 others, bad: ... )
         
         case '/startVote':
-          // TODO low: check if existing voteState -> warning (you already started to answer poll "title" but didn't submited results)
+          // checking if existing userVote -> warning
+          if (userVote && ! userVote.deleteConfirm) {
+            userVote.deleteConfirm = true;
+            sendTo('/answerCallbackQuery', {callback_query_id: req.body.callback_query.id, show_alert: true,
+                  text: `You already started to answer a poll, clicking this button again will wipe your existing responses. You can reset the other poll by clicking /abort.`});
+            return;
+          }
+
           notifBody = `let's begin!`;
           userVoteState = await getVoteState(user, query.poll);
           const answers = await db.select('out("PollAnswer").@rid as rids', 'out("PollAnswer").text as texts')
@@ -448,7 +473,7 @@ ${ userVoteState.voted? '_You already voted. This will erase your previous resul
                          [{text: 'abort', callback_data: '/abort ' + query.poll }]];
           
           
-          voteState.set(user, {poll: query.poll, ansRids: answers.rids, ansTxts: answers.texts, votes: [], step: 0});
+          voteState.set(user, {poll: query.poll, ansRids: answers.rids, ansTxts: answers.texts, votes: [], step: 0, message: msgId});
           break;
           
         case '/vote':
@@ -511,17 +536,26 @@ ${ userVoteState.voted? '_You already voted. This will erase your previous resul
              
         case '/update':
           
-          notifBody += 'Poll refreshed.'
+          notifBody += 'Poll was refreshed.';
           let poll = await getDisplayablePoll(query.poll || userVote.poll, user);
           msg = poll.text;
           keyboard = poll.keyboard;
-        
+
       }
-      sendTo('/answerCallbackQuery', {callback_query_id: req.body.callback_query.id, text: notifBody});
+      sendTo('/answerCallbackQuery', {callback_query_id: req.body.callback_query.id, text: notifBody, show_alert: wrongState});
       updateMsg(chatId, msgId, msg, keyboard);
     }
+    else if (req.body.callback_query) {
+      let query = parseQuery (req.body.callback_query.data);
+      if (query.cmd === '/viewResults'){
+        const results = await getPollResults(query.poll);
+        sendMessage(req.body.callback_query.from.id, results.text, results.keyboard, true);
+        sendTo('/answerCallbackQuery', {callback_query_id: req.body.callback_query.id, text: 'sent!'});
+      }
+      else
+        sendTo('/answerCallbackQuery', {callback_query_id: req.body.callback_query.id, text: 'this is not supposed to happen, what did you do?', show_alert: true});
+    }
 
-    
   })();
     
 });
@@ -546,7 +580,7 @@ async function sendMessage (chat, msg, keyboard, inline) {
     resp.reply_markup = {remove_keyboard: true};
   }
   return await sendTo ('/sendMessage', resp);
-};
+}
 
 // updates a message with keyboard
 async function updateMsg (chatId, msgId, newMsg, keyboard) {
@@ -558,7 +592,7 @@ async function updateMsg (chatId, msgId, newMsg, keyboard) {
               reply_markup: {inline_keyboard: keyboard}
             };
   return await sendTo ('/editMessageText', resp);
-};
+}
 
 // answer to inline queries with results array
 async function answerInline (query, results) {
@@ -568,7 +602,7 @@ async function answerInline (query, results) {
                 results: results
                };
   return await sendTo ('/answerInlineQuery', resp);
-};
+}
 
 // sends any body to the specified route
 async function sendTo (route, body) {
@@ -585,7 +619,7 @@ async function sendTo (route, body) {
 	catch (err) { 
     debug ('error while sending', err.toString());
   }
-};
+}
 
 
 async function getUserRid (user) {
@@ -594,25 +628,25 @@ async function getUserRid (user) {
 
   if ( !result || !result.rid) return null;
   return result.rid ;
-};
+}
 
 async function getVoteState(userId, pollRid) {
   
   const rep = await db.select('count(*)', 'anonymous', '@rid as rid').from('AnsweredPoll').where( {in: pollRid, 'out.id': userId}).one();
   return {voted: rep.count > 0, anonymous: rep.anonymous, rid: rep.rid};
-};
+}
 
 async function getVotes (userId, pollRid) {
   // query not working, apparently out/in("Edge") doesn't work in where...: select @rid as rid, vote, in.text as option from Voted where out.id=ID and in.in('PollAnswer').@rid='#NB'
   //return await db.select('@rid as rid', 'vote', 'in.text as option').from('Voted').where( {'out.id': userId, 'in.in("PollAnswer")': pollRid}).all();
   
   return await db.query('select @rid as rid, vote, in.text as answer from Voted where out.id='+userId+' and in in (select in from PollAnswer where out="'+pollRid+'")');
-};
+}
 
 // TODO low check what is really needed for search, for now only 'question' and 'closed' used.
 async function getBasicPollInfo (pollId) {
   return await db.select('question', 'public', 'closed').from('Poll').where({'@rid': pollId}).one();
-};
+}
 
 
 // returns formatted question and answers, along with inline keyboard to take actions.
@@ -650,7 +684,7 @@ ${ poll.tags.length === 0 ? '': '*Tags:* ' + poll.tags.join(', ')}\n`;
   // setting keyboard
   let keyboard = [[{text: `share${poll.closed ? ' results':''}`, switch_inline_query: `/share ${pollRid}`}]];
   if (! poll.closed) {
-    keyboard.push([{text: (userVoteState.voted? 'edit ':'')+'vote', callback_data: `/startVote ${pollRid}` }]);
+    keyboard.unshift([{text: (userVoteState.voted? 'edit ':'')+'vote', callback_data: `/startVote ${pollRid}` }]);
     keyboard.push([{text: 'update', callback_data: `/update ${pollRid}`}]);
     if (userId && poll.creatorId === userId) {
       keyboard.push([{text: 'close poll', callback_data: `/close ${pollRid}`}]);
@@ -765,7 +799,7 @@ async function getPollResults (pollId) {
   
   //debug('compute', compute);
   return { text: msg, keyboard: [[{text: 'share results', switch_inline_query: `/share ${pollId}`}]] };
-};
+}
 
 
 // currently only bold and italic supported (not overlapped)
@@ -804,138 +838,119 @@ function parseQuery (query) {
       break;
   }
   return parsed;
-};
+}
 
 
 //parsing user queries (format: #latest #question wordToSearch)
-function parseQuerySearch(parsedTerms, index){
+function parseQuerySearch(parsedTerms){
 
-  let queryMiddle, tmp;
+  let queryParsed, firstIndex;
 
-  queryMiddle ={};
-  queryMiddle.orderBy = undefined;
-  queryMiddle.middle = ``;
+  queryParsed = {middle: '', letTags: '', letOpt: '', simpleTerms: [] };
 
-  
-  
-    if(index < parsedTerms.length){
-      switch(parsedTerms[index]){
-        
-        case "#oldest":
-          queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date ASC`;
+  for (let index = 0; index < parsedTerms.length ; index ++)
+
+    switch(parsedTerms[index]){
+        // if one or more #oldest, sorted by oldest date
+      case "#oldest":
+        queryParsed.orderByDate =  `date ASC`;
+        break;
+      case "#latest":
+        // cool bro
+        break;
+        // only the last of un/popular is taken into account
+      case "#popular":
+        queryParsed.orderByPop =  `nbVotes DESC`;
+        break;
+      case "#unpopular":
+        queryParsed.orderByPop =  `nbVotes ASC`;
+        break;
+      case '#limit':
+        let valid = false;
+        if (parsedTerms[index+1] && (valid = parseInt(parsedTerms[index+1]), valid)) {
+          queryParsed.limit = valid > 30 ? 30 : (valid < 1 ? 1 : valid);
+          index ++;
+        }
+        break;
+      case "#tag":
+      case "#tags":
+
+        if (parsedTerms.slice(0,index).includes('#tag') || ! nextTermValid (parsedTerms, index)) break;
+        // working query in studio: SELECT @rid as rid,out("HasTag").name, in(AnsweredPoll).size(), creator.name, date, question, public, closed, $tags FROM Poll let $tags=(select count()as pert from hastag where out=$parent.$current and (in.name like 'lol%' or in.name like '%u%')) WHERE (creator.name = max OR public = true) and $tags[0].pert>0 group by rid order by date asc
+        // but the "group by" part in orientJS shits itselfs, returning only one result instead of 3.
+        firstIndex = ++ index;
+        // apparently it is not possible to search only for a part of a string in where (e.g. with like) when the strings
+        // to match are in a collection (here: out(HasTag).name ), the only working patterns are "term1 in out(...) AND term2 in out(...)"
+        // and "out(...) containsAll ['term1', 'term2']", and those matches only the whole string, so a let subquery is used as fallback.
+        queryParsed.middle += `${queryParsed.middle? 'AND':''} $tags[0].pert > 0 `; // cannot change to 'tags > 0', empty results =/
+        // $tags.pert give the accuracy of the request, it indicates the number of tags matched.
+        queryParsed.letTags += `${queryParsed.letTags?', ':''}let $tags=(SELECT COUNT(*) as pert FROM HasTag WHERE out=$parent.$current AND (`;
+        queryParsed.sortByTags = 'tags DESC';
+        // all terms until next # or end of query are searched in tags
+        while(index < parsedTerms.length && parsedTerms[index][0] !== '#'){
+
+          if(index > firstIndex){
+            queryParsed.letTags += ` OR `;
+          }
+          queryParsed.letTags +=  `in.name like "%${parsedTerms[index]}%"`;
           index++;
-          if(index < parsedTerms.length){
-            tmp = parseQuerySearch(parsedTerms, index);
-            queryMiddle.middle += tmp.middle;
+        }
+        index -- ;
+        queryParsed.letTags += `)) `;
+        break;
+      case "#question":  //phrase query
+
+        if (parsedTerms.slice(0,index).includes('#question') || ! nextTermValid (parsedTerms, index)) break;
+        firstIndex = ++ index;
+        queryParsed.middle += `${queryParsed.middle? 'AND':''} question containsText "`;
+        while(index < parsedTerms.length && parsedTerms[index][0] !== '#'){
+
+          if (index > firstIndex){ // separate each keyword by a space
+            queryParsed.middle += ' ';
           }
-          break;
-        case "#latest":
-          queryMiddle.orderBy =  `  GROUP BY @rid ORDER BY date DESC`;
+          queryParsed.middle += parsedTerms[index];
           index++;
-          if(index < parsedTerms.length){
-            tmp = parseQuerySearch(parsedTerms, index);
-            queryMiddle.middle += tmp.middle;
+        }
+        index --;
+        queryParsed.middle += '" ';
+        break;
+      case "#option":
+      case "#options":
+
+        if (! nextTermValid (parsedTerms, index)) break;
+        if (! parsedTerms.slice(0,index).includes('#option'))
+          queryParsed.middle += `${queryParsed.middle? 'AND':''} $opt[0].pert > 0 `; // cannot change to 'options > 0', empty results =/
+        // $tags.pert give the accuracy of the request, it indicates the number of tags matched.
+        queryParsed.letOpt = queryParsed.letOpt ? queryParsed.letOpt.substring(0, queryParsed.letOpt.length -3) + ' OR '
+            : `$opt=(SELECT COUNT(*) as pert FROM PollAnswer WHERE out=$parent.$current AND (`;
+        queryParsed.sortByOption = 'options DESC';
+        firstIndex = ++ index;
+        // all terms until next # or end of query are searched in the same option. (AND)
+        // another #option keyword can be given to search in others options. (OR between all options)
+        while(index < parsedTerms.length && parsedTerms[index][0] !== '#'){
+
+          if(index > firstIndex){
+            queryParsed.letOpt += ` AND `;
           }
-          break;
-        case "#popular":
-          queryMiddle.orderBy =  ` GROUP BY @rid ORDER BY cnt DESC`;
+          queryParsed.letOpt +=  `in.text like "%${parsedTerms[index]}%"`;
           index++;
-          if(index < parsedTerms.length){
-            tmp = parseQuerySearch(parsedTerms, index);
-            queryMiddle.middle += tmp.middle;
-          }
-          break;
-        case "#tag":
-          index++;
-          while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
-          
-            if(checkingFirstChar(parsedTerms, 0, index)){ //Verify that there is not several # in a row
-              queryMiddle.middle += ` OR `;
-            }
-            
-            queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) `;
-            
-            
-            index++;
-          }
-          tmp = parseQuerySearch(parsedTerms, index);
-          queryMiddle.middle += tmp.middle;
-          queryMiddle.orderBy = tmp.orderBy;
-          break;
-        case "#question":                               //phrase query
-          index++;
-          let indexBegin = index;
-          let parenthesis;
-          if(checkingFirstChar(parsedTerms, 0, index)){ //Verify that there is not several # in a row
-            queryMiddle.middle += ` OR (`;
-            parenthesis = true;
-          }
-          while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
-           
-            if(checkingFirstChar(parsedTerms, indexBegin, index)){ //Verify that there is not several # in a row to avoid to put an OR and an AND in a row
-              queryMiddle.middle += ` AND `;
-            }
-            
-            queryMiddle.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) `;
-            
-            
-            index++;
-          }
-          if(parenthesis){
-            queryMiddle.middle += ` ) `;
-          }
-          tmp = parseQuerySearch(parsedTerms, index);
-          queryMiddle.middle += tmp.middle;
-          queryMiddle.orderBy = tmp.orderBy;
-          break;
-        case "#option":
-          index++;
-          while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
-            
-          
-            if(checkingFirstChar(parsedTerms, 0, index)){ //Verify that there is not several # in a row
-              queryMiddle.middle += ` OR `;
-            }
-            
-            queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
-            
-          
-            index++;
-          }
-          tmp = parseQuerySearch(parsedTerms, index);
-          queryMiddle.middle += tmp.middle;
-          queryMiddle.orderBy = tmp.orderBy;
-          break;
-        default:
-          while(index < parsedTerms.length && parsedTerms[index][0] != '#'){
-            
-          
-            if(index != 0 && checkingFirstChar(parsedTerms, 0, index)){ //Verify that there is not several # in a row
-              queryMiddle.middle += ` OR `;
-            }
-            
-            queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) OR `
-            queryMiddle.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) OR `;
-            queryMiddle.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
-          
-          
-            
-            index++;
-          }
-          
-            tmp = parseQuerySearch(parsedTerms, index);
-          
-          queryMiddle.middle += tmp.middle;
-          queryMiddle.orderBy = tmp.orderBy;
-          break;
-      }
-      //debug("results", results);
+        }
+        index --;
+        queryParsed.letOpt += `)) `;
+        break;
+      default:
+        if(parsedTerms[index][0] !== '#'){ // non existing keywords are ignored
+          queryParsed.simpleTerms.push(parsedTerms[index]);
+          //     `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) OR `;
+          // queryParsed.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) OR `;
+          // queryParsed.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
+        }
     }
-  
-    console.log(queryMiddle)
-  
 
-  return queryMiddle;
+  //console.log(queryParsed);
+
+
+  return queryParsed;
 
 }
 
@@ -951,6 +966,11 @@ function checkingFirstChar(parsedTerms, indexBegin, indexEnd){
   return false;
 }
 
+function nextTermValid (array, index) {
+    // check if end of array or next word is tag
+    return array[index+1] && array[index+1][0] !=='#';
+}
+
 
 
 // computes the levenstein distance for 2 words
@@ -963,7 +983,7 @@ function stringDistance (str1, str2) {
                        + ( str1[i-1].toLowerCase() === str2[j-1].toLowerCase() ? 0 : 1) );
   }
   return getScore(str1.length, str2.length);
-};
+}
 
 
 
@@ -1002,9 +1022,8 @@ app.get('/test', function(req,res){
 
 
 function debug (text, obj) {
-  console.log(text + ' - ' + JSON.stringify(obj));
-};
-
+  console.log(text + ' - ' + JSON.stringify(obj).substring(0,700));
+}
 
 
 
