@@ -1,0 +1,6 @@
+.DS_Store
+doc/
+backend/apiKey
+backend/creationStateBackup.json
+backend/voteStateBackup.json
+backend/node_modules/

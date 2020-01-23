@@ -80,7 +80,7 @@ We opted for this model because it seemed to correspond best to the schema to wh
 The following rules are applied:  
 
 ###### sorting
-* \#tags and #options are synomyms for resp. *tag and #option.
+* \#tags and #options are synomyms for resp. #tag and #option.
 * only the last of either #popular or #unpopular is taken into account, it filters results by number of people having voted.
 * if one or more #oldest are present, results are filtered by oldest poll creation date.  
 * the following sorting order is applied:
@@ -112,6 +112,6 @@ The following rules are applied:
 __from the backend folder:__ (`$ cd path/to/project/backend/`)
 
 * get your api key from [Botfather](https://t.me/botfather) and set it (`$ echo 'yourKey' > apiKey`), you thought I'd give mine?=p  
-*  Enable the inline queries by typing the command `/inline`, choose your bot in the list and enter the placeholder.  
+* Enable inline queries by typing the command `/inline`, choose your bot in the list and enter the placeholder.  
 * change the botName variable by your bot username in bestOption.js  
 * launch the express server : `$ npm install; npm start`. Alternatively to npm start, `$ npm run dev` launches nodemon (`$ npm i -g nodemon` to install) which reloads on changes.

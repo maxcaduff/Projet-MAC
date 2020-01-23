@@ -331,9 +331,9 @@ created on: ${poll.date.toString().slice(0,21)}   /view${ poll.rid.toString().su
             const poll = await getDisplayablePoll (query.poll);
             msg = poll.text;
             // changing buttons, since no msg is sent in an inline update.(Must answer poll in chat with bot)
-            key = poll.keyboard.slice(0,2);
-            delete key[1][0].callback_data;
-            key[1][0].url = 'telegram.me/' + botUsername + '?start=' + query.poll.substring(1).replace(':', '-');
+            key = [[poll.keyboard[0][0], poll.keyboard[1][0]]] ;
+            delete key[0][0].callback_data;
+            key[0][0].url = 'telegram.me/' + botUsername + '?start=' + query.poll.substring(1).replace(':', '-');
           }
             
           results.push( { id: query.poll, 
@@ -478,7 +478,6 @@ ${ userVoteState.voted? '_You already voted. This will erase your previous resul
           
         case '/vote':
           
-          // TODO low: check if !userVote -> error (shouldn't happen with the state save)
           notifBody = `you rated: ${rates[query.vote]} for "${userVote.ansTxts[userVote.step]}"`;
           userVote.votes.push(query.vote);
           userVote.step ++;
@@ -498,8 +497,6 @@ ${ userVoteState.voted? '_You already voted. This will erase your previous resul
           
         case '/anonymous':
         
-          // TODO low: check if uservote is null -> error (but shouldn't happen)
-          
           // checking if poll not already closed:
           const pollState = await getBasicPollInfo(userVote.poll);
           
@@ -685,7 +682,7 @@ ${ poll.tags.length === 0 ? '': '*Tags:* ' + poll.tags.join(', ')}\n`;
   let keyboard = [[{text: `share${poll.closed ? ' results':''}`, switch_inline_query: `/share ${pollRid}`}]];
   if (! poll.closed) {
     keyboard.unshift([{text: (userVoteState.voted? 'edit ':'')+'vote', callback_data: `/startVote ${pollRid}` }]);
-    keyboard.push([{text: 'update', callback_data: `/update ${pollRid}`}]);
+    keyboard[1].push({text: 'update', callback_data: `/update ${pollRid}`});
     if (userId && poll.creatorId === userId) {
       keyboard.push([{text: 'close poll', callback_data: `/close ${pollRid}`}]);
     }
@@ -841,7 +838,7 @@ function parseQuery (query) {
 }
 
 
-//parsing user queries (format: #latest #question wordToSearch)
+//parsing user queries
 function parseQuerySearch(parsedTerms){
 
   let queryParsed, firstIndex;
@@ -941,9 +938,6 @@ function parseQuerySearch(parsedTerms){
       default:
         if(parsedTerms[index][0] !== '#'){ // non existing keywords are ignored
           queryParsed.simpleTerms.push(parsedTerms[index]);
-          //     `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("HasTag").name) OR `;
-          // queryParsed.middle += `(question containsText ` + "\"" + parsedTerms[index]  + "\"" + `) OR `;
-          // queryParsed.middle += `(` +  "\"" + parsedTerms[index] + "\"" + ` IN out("PollAnswer").text) `;
         }
     }
 
@@ -954,17 +948,6 @@ function parseQuerySearch(parsedTerms){
 
 }
 
-//Check the first char of the array till the index indexEnd to see if all the first char are # (ex: ([#latest, #tag, #question, is, there], 2) = false)
-function checkingFirstChar(parsedTerms, indexBegin, indexEnd){
-  let count = indexBegin;
-  while(count < indexEnd){
-    if(parsedTerms[count][0] != '#'){
-      return true;
-    }
-    ++count;
-  }
-  return false;
-}
 
 function nextTermValid (array, index) {
     // check if end of array or next word is tag
